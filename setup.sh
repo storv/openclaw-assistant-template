@@ -8,24 +8,30 @@ err()  { echo -e "${RED}❌ $1${NC}"; exit 1; }
 info() { echo -e "${CYAN}$1${NC}"; }
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  内网数字助手 — 初始化脚本 v2.1"
+echo "  内网数字助手 — 初始化脚本 v2.3"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # ── 确保在仓库根目录运行 ──────────────────────
 REPO_DIR="$(pwd)"
 if [ ! -d "$REPO_DIR/workspace" ]; then
-  err "请在仓库根目录运行此脚本（当前目录下找不到 workspace/）\n  请先 cd 到 openclaw-assistant-template 目录再运行"
+  err "请在仓库根目录运行此脚本（当前目录找不到 workspace/）\n请先执行：cd openclaw-assistant-template"
 fi
-ok "仓库根目录确认：$REPO_DIR"
+ok "仓库根目录：$REPO_DIR"
 
-# ── 部署目标路径 ──────────────────────────────
+# ── 部署路径 ──────────────────────────────────
 WORKSPACE="${OPENCLAW_WORKSPACE:-$HOME/.openclaw/workspace}"
 echo ""
 echo "部署路径：$WORKSPACE"
-read -p "确认？(y/N) " confirm
-[[ "$confirm" =~ ^[Yy]$ ]] || { warn "已取消"; exit 0; }
 
-# ── 创建所有目录 ──────────────────────────────
+# 终端环境询问确认，非交互式环境自动跳过
+if [ -t 0 ]; then
+  read -p "确认部署到此路径？(y/N) " confirm
+  [[ "$confirm" =~ ^[Yy]$ ]] || { warn "已取消"; exit 0; }
+else
+  ok "非交互式环境，自动确认"
+fi
+
+# ── 创建目录 ──────────────────────────────────
 mkdir -p \
   "$WORKSPACE/skills" \
   "$WORKSPACE/memory/archive" \
@@ -41,10 +47,10 @@ ok "目录结构创建完成"
 copy_if_new() {
   local src="$1" dst="$2"
   if [ ! -f "$src" ]; then
-    warn "源文件不存在，跳过：$src"; return
+    warn "源文件不存在，跳过：$(basename "$src")"; return
   fi
   if [ -f "$dst" ]; then
-    warn "目标已存在，跳过：$(basename "$dst")"
+    warn "已存在，跳过：$(basename "$dst")"
   else
     cp "$src" "$dst" && ok "已复制：$(basename "$dst")"
   fi
@@ -64,7 +70,7 @@ done
 copy_with_backup() {
   local src="$1" dst="$2"
   if [ ! -f "$src" ]; then
-    warn "源文件不存在，跳过：$src"; return
+    warn "源文件不存在，跳过：$(basename "$src")"; return
   fi
   if [ -f "$dst" ]; then
     cp "$dst" "${dst}.bak.$(date +%Y%m%d_%H%M%S)"
@@ -98,11 +104,11 @@ if ! grep -q 'openclaw/workspace' "$RC_FILE" 2>/dev/null; then
   echo "export WORKSPACE=\"$WORKSPACE\"" >> "$RC_FILE"
   ok "已写入 WORKSPACE 到 $RC_FILE"
 else
-  warn "WORKSPACE 已存在于 $RC_FILE，跳过写入"
+  warn "WORKSPACE 已存在于 $RC_FILE，跳过"
 fi
 export WORKSPACE="$WORKSPACE"
 
-# ── 验证关键文件是否齐全 ──────────────────────
+# ── 验证关键文件 ───────────────────────────────
 echo ""
 echo "── 部署验证 ──────────────────────────"
 DEPLOY_ERR=""
@@ -134,42 +140,48 @@ echo ""
 echo "── 健康检查 ──────────────────────────"
 WORKSPACE="$WORKSPACE" bash "$WORKSPACE/scripts/health-check.sh"
 
-# ── 完成，输出激活提示词 ───────────────────────
+# ── 输出激活提示词 ─────────────────────────────
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-ok "文件部署完成！"
-echo ""
-info "现在打开 OpenClaw，把下面这段话粘贴进去👇"
-echo ""
-echo "┌─────────────────────────────────────────────────┐"
-echo "│                                                 │"
-echo "│  请读取以下配置文件完成初始化：                 │"
-echo "│  IDENTITY.md、AGENTS.md、                       │"
-echo "│  memory/core.md、memory/project.md、            │"
-echo "│  memory/recent.md，以及 skills/ 下所有文件。    │"
-echo "│                                                 │"
-echo "│  读取完成后，请向我提问以下内容来完善你的设定：  │"
-echo "│                                                 │"
-echo "│  🤖 关于你自己：                                │"
-echo "│  1. 给你起个名字 — 你想叫什么？                 │"
-echo "│  2. 定义性格 — 希望你是什么风格的助手？         │"
-echo "│     （直接/温和/幽默/严谨 等）                  │"
-echo "│  3. 有什么口头禅或特别的表达习惯吗？            │"
-echo "│                                                 │"
-echo "│  👤 关于我：                                    │"
-echo "│  4. 我的称呼和所在时区                          │"
-echo "│  5. 我的工作场景和日常使用偏好                  │"
-echo "│  6. 希望你重点协助哪些方面                      │"
-echo "│                                                 │"
-echo "│  收集完以上信息后，请：                         │"
-echo "│  - 将助手设定写入 IDENTITY.md                   │"
-echo "│  - 将我的信息写入 memory/core.md                │"
-echo "│  - 执行 /remember 和 /session-notes             │"
-echo "│  - 做一个简短的自我介绍                         │"
-echo "│                                                 │"
-echo "└─────────────────────────────────────────────────┘"
-echo ""
-info "另外记得设置 2 个 cron 任务（在 OpenClaw 里输入）："
-echo "  每天 00:00 执行 /memory-evolution"
-echo "  每周一 09:00 执行 /weekly-self-reflection"
+ok "部署完成！"
+info "\n把下面这段话复制到 OpenClaw 对话框，开始激活 👇\n"
+cat << 'PROMPT'
+┌─────────────────────────────────────────────────────────┐
+
+请读取以下文件完成初始化：
+IDENTITY.md、AGENTS.md、memory/core.md、
+memory/project.md、memory/recent.md
+以及 skills/ 下所有文件。
+
+读取完成后，请依次问我以下问题来完善你的设定：
+
+🤖 关于你自己：
+1. 给你起个名字 — 你想叫什么？
+2. 你的性格风格 — 直接/温和/幽默/严谨，或者自由描述
+3. 有什么口头禅或特别的表达习惯吗？（没有可跳过）
+
+👤 关于我：
+4. 叫我什么，你在哪个时区？
+5. 你的工作场景和日常使用偏好是什么？
+6. 希望我重点协助哪些方面？
+
+收集完以上信息后，请：
+- 将助手设定写入 IDENTITY.md
+- 将用户信息写入 memory/core.md
+- 执行 /remember 和 /session-notes
+
+完成以上步骤后，请立即创建以下 2 个定时任务：
+1. 每天 00:00 执行 /memory-evolution
+   （每日自动整理学习记录，触发进化建议）
+2. 每周一 09:00 执行 /weekly-self-reflection
+   （每周复盘，生成规则优化建议）
+
+定时任务创建完成后，请：
+- 确认两个任务已成功注册并报告状态
+- 做一个简短的自我介绍，确认全部初始化完成
+
+└─────────────────────────────────────────────────────────┘
+PROMPT
+
+info "\n初始化完成后助手会自动设置定时任务，无需额外操作。"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
