@@ -1,22 +1,30 @@
 #!/bin/bash
 set -e
 
-GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
+GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 ok()   { echo -e "${GREEN}✅ $1${NC}"; }
 warn() { echo -e "${YELLOW}⚠️  $1${NC}"; }
+err()  { echo -e "${RED}❌ $1${NC}"; exit 1; }
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  内网数字助手 — 初始化脚本 v2.1"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-WORKSPACE="${OPENCLAW_WORKSPACE:-$HOME/.openclaw/workspace}"
-REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+# ── 确保在仓库根目录运行 ──────────────────────
+REPO_DIR="$(pwd)"
+if [ ! -d "$REPO_DIR/workspace" ]; then
+  err "请在仓库根目录运行此脚本（当前目录下找不到 workspace/）\n  请先 cd 到 openclaw-assistant-template 目录再运行"
+fi
+ok "仓库根目录确认：$REPO_DIR"
 
+# ── 部署目标路径 ──────────────────────────────
+WORKSPACE="${OPENCLAW_WORKSPACE:-$HOME/.openclaw/workspace}"
+echo ""
 echo "部署路径：$WORKSPACE"
 read -p "确认？(y/N) " confirm
 [[ "$confirm" =~ ^[Yy]$ ]] || { warn "已取消"; exit 0; }
 
-# ── 创建目录 ──────────────────────────────────
+# ── 创建所有目录 ──────────────────────────────
 mkdir -p \
   "$WORKSPACE/skills" \
   "$WORKSPACE/memory/archive" \
@@ -30,8 +38,16 @@ ok "目录结构创建完成"
 
 # ── 第一类：用户配置文件，已存在则跳过 ────────
 copy_if_new() {
-  [ -f "$2" ] && { warn "已存在，跳过：$(basename "$2")"; return; }
-  cp "$1" "$2" && ok "已复制：$(basename "$2")"
+  local src="$1" dst="$2"
+  if [ ! -f "$src" ]; then
+    warn "源文件不存在，跳过：$src"
+    return
+  fi
+  if [ -f "$dst" ]; then
+    warn "目标已存在，跳过：$(basename "$dst")"
+  else
+    cp "$src" "$dst" && ok "已复制：$(basename "$dst")"
+  fi
 }
 
 copy_if_new "$REPO_DIR/workspace/IDENTITY.md"       "$WORKSPACE/IDENTITY.md"
@@ -41,26 +57,30 @@ copy_if_new "$REPO_DIR/workspace/memory/project.md" "$WORKSPACE/memory/project.m
 copy_if_new "$REPO_DIR/workspace/memory/recent.md"  "$WORKSPACE/memory/recent.md"
 
 for f in "$REPO_DIR/workspace/skills/"*.md; do
-  copy_if_new "$f" "$WORKSPACE/skills/$(basename "$f")"
+  [ -f "$f" ] && copy_if_new "$f" "$WORKSPACE/skills/$(basename "$f")"
 done
 
 # ── 第二类：脚本文件，已存在则备份后更新 ──────
 copy_with_backup() {
-  if [ -f "$2" ]; then
-    cp "$2" "${2}.bak.$(date +%Y%m%d_%H%M%S)"
-    warn "已备份旧版本：$(basename "$2")"
+  local src="$1" dst="$2"
+  if [ ! -f "$src" ]; then
+    warn "源文件不存在，跳过：$src"
+    return
   fi
-  cp "$1" "$2" && ok "已更新：$(basename "$2")"
+  if [ -f "$dst" ]; then
+    cp "$dst" "${dst}.bak.$(date +%Y%m%d_%H%M%S)"
+    warn "已备份旧版本：$(basename "$dst")"
+  fi
+  cp "$src" "$dst" && ok "已更新：$(basename "$dst")"
 }
 
-# 注意：源文件在 REPO_DIR/workspace/scripts/
 copy_with_backup "$REPO_DIR/workspace/scripts/evolve.py"       "$WORKSPACE/scripts/evolve.py"
 copy_with_backup "$REPO_DIR/workspace/scripts/baseline.sh"     "$WORKSPACE/scripts/baseline.sh"
 copy_with_backup "$REPO_DIR/workspace/scripts/health-check.sh" "$WORKSPACE/scripts/health-check.sh"
 chmod +x "$WORKSPACE/scripts/"*.sh "$WORKSPACE/scripts/evolve.py"
 ok "脚本文件已部署并赋权"
 
-# ── 初始化日志 ─────────────────────────────────
+# ── 初始化日志文件 ─────────────────────────────
 touch "$WORKSPACE/.openclaw/logs/events.jsonl"
 [ -f "$WORKSPACE/.openclaw/logs/last_evolution_line.txt" ] || \
   echo "0" > "$WORKSPACE/.openclaw/logs/last_evolution_line.txt"
@@ -76,10 +96,37 @@ else
 fi
 
 if ! grep -q 'openclaw/workspace' "$RC_FILE" 2>/dev/null; then
-  echo 'export WORKSPACE="$HOME/.openclaw/workspace"' >> "$RC_FILE"
-  ok "已写入 WORKSPACE 到 $RC_FILE"
+  echo "export WORKSPACE=\"$WORKSPACE\"" >> "$RC_FILE"
+  ok "已写入 WORKSPACE=$WORKSPACE 到 $RC_FILE"
+else
+  warn "WORKSPACE 已存在于 $RC_FILE，跳过写入"
 fi
-source "$RC_FILE" 2>/dev/null || true
+export WORKSPACE="$WORKSPACE"
+
+# ── 验证关键文件是否齐全 ──────────────────────
+echo ""
+echo "── 部署验证 ──────────────────────────"
+check_file() {
+  if [ -f "$1" ]; then
+    echo "OK  $1"
+  else
+    echo "ERR 缺失：$1"
+    DEPLOY_ERR=1
+  fi
+}
+
+check_file "$WORKSPACE/IDENTITY.md"
+check_file "$WORKSPACE/AGENTS.md"
+check_file "$WORKSPACE/memory/core.md"
+check_file "$WORKSPACE/memory/project.md"
+check_file "$WORKSPACE/memory/recent.md"
+check_file "$WORKSPACE/scripts/evolve.py"
+check_file "$WORKSPACE/scripts/health-check.sh"
+
+if [ -n "$DEPLOY_ERR" ]; then
+  err "部分文件缺失，请检查仓库结构是否完整"
+fi
+ok "所有关键文件就位"
 
 # ── Git 初始化 ─────────────────────────────────
 cd "$WORKSPACE"
@@ -90,9 +137,10 @@ git add IDENTITY.md AGENTS.md memory/ skills/ scripts/ 2>/dev/null || true
 git commit -m "baseline: 内网数字助手初始化 $(date +%Y-%m-%d)" 2>/dev/null || \
   warn "Git commit 跳过（无变更或 git 未配置用户名）"
 
-# ── 健康检查 ───────────────────────────────────
+# ── 运行健康检查 ───────────────────────────────
 echo ""
-WORKSPACE=$WORKSPACE bash "$WORKSPACE/scripts/health-check.sh"
+echo "── 健康检查 ──────────────────────────"
+WORKSPACE="$WORKSPACE" bash "$WORKSPACE/scripts/health-check.sh"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -105,7 +153,7 @@ echo "  2. 编辑 $WORKSPACE/memory/core.md"
 echo "     → 填写你的环境信息和偏好"
 echo "  3. 在 OpenClaw 对话框输入："
 echo '     请执行初始化：读取所有配置文件，然后介绍你自己。'
-echo "  4. 在 OpenClaw 设置 2 个 cron 任务："
+echo "  4. 设置 2 个 cron 任务："
 echo "     每天 00:00 执行 /memory-evolution"
 echo "     每周一 09:00 执行 /weekly-self-reflection"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
