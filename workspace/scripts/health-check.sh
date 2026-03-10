@@ -1,6 +1,4 @@
 #!/bin/bash
-
-# WORKSPACE 必须由调用方传入，否则报错
 if [ -z "$WORKSPACE" ]; then
   echo "ERR WORKSPACE 未设置，请用 WORKSPACE=/path bash health-check.sh 调用"
   exit 1
@@ -34,7 +32,7 @@ except FileNotFoundError:
     pass
 PY"
 check "Git 仓库正常"            "cd \"$BASE\" && git status"
-check "磁盘 > 1GB"              "[ \$(df \"$BASE\" --output=avail 2>/dev/null | tail -1 || df \"$BASE\" | tail -1 | awk '{print \$4}') -gt 1048576 ]"
+check "磁盘 > 1GB"              "[ \$(df -k \"$BASE\" | tail -1 | awk '{print \$4}') -gt 1048576 ]"
 check "IDENTITY.md 存在"        "test -f \"$BASE/IDENTITY.md\""
 check "AGENTS.md 存在"          "test -f \"$BASE/AGENTS.md\""
 check "memory/core.md 存在"     "test -f \"$BASE/memory/core.md\""
