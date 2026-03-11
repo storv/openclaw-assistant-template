@@ -1,43 +1,59 @@
 #!/bin/bash
-if [ -z "$WORKSPACE" ]; then
-  echo "ERR WORKSPACE 未设置，请用 WORKSPACE=/path bash health-check.sh 调用"
-  exit 1
-fi
-
-BASE="$WORKSPACE"
+BASE="${WORKSPACE:-$HOME/.openclaw/workspace}"
 PASS=0; FAIL=0
 
 check() {
   local desc="$1"; shift
-  if eval "$@" &>/dev/null; then
-    echo "OK  $desc"; ((PASS++))
-  else
-    echo "ERR $desc"; ((FAIL++))
-  fi
+  if eval "$@" &>/dev/null; then echo "OK  $desc"; ((PASS++))
+  else echo "ERR $desc"; ((FAIL++)); fi
 }
 
-check "workspace 可写"          "touch \"$BASE/.wt\" && rm \"$BASE/.wt\""
-check "events.jsonl 可写"       "touch \"$BASE/.openclaw/logs/events.jsonl\""
-check "events.jsonl JSON 合法"  "python3 - << 'PY'
-import json, sys
-bad = []
+disk_ok() {
+  local avail
+  avail=$(df -k "$BASE" 2>/dev/null | tail -1 | awk '{print $4}')
+  [ -n "$avail" ] && [ "$avail" -gt 1048576 ]
+}
+
+# 自动检测 OpenClaw 运行时目录
+EVENTS_FILE=""
+for candidate in \
+  "$BASE/.sys/logs/events.jsonl" \
+  "$BASE/.openclaw/logs/events.jsonl"; do
+  if [ -f "$candidate" ]; then
+    EVENTS_FILE="$candidate"
+    break
+  fi
+done
+if [ -z "$EVENTS_FILE" ]; then
+  mkdir -p "$BASE/.sys/logs"
+  touch "$BASE/.sys/logs/events.jsonl"
+  EVENTS_FILE="$BASE/.sys/logs/events.jsonl"
+fi
+
+echo "-- Runtime dir: $(dirname $EVENTS_FILE)"
+
+check "workspace writable"      "touch \"$BASE/.wt\" && rm \"$BASE/.wt\""
+check "events.jsonl writable"   "touch \"$EVENTS_FILE\""
+check "events.jsonl JSON valid" "python3 -c \"
+import json,sys
+bad=[]
 try:
-    for i, l in enumerate(open('$BASE/.openclaw/logs/events.jsonl'), 1):
-        l = l.strip()
-        if not l: continue
-        try: json.loads(l)
-        except: bad.append(i)
-    if bad: print('bad lines:', bad); sys.exit(1)
-except FileNotFoundError:
-    pass
-PY"
-check "Git 仓库正常"            "cd \"$BASE\" && git status"
-check "磁盘 > 1GB"              "[ \$(df -k \"$BASE\" | tail -1 | awk '{print \$4}') -gt 1048576 ]"
-check "IDENTITY.md 存在"        "test -f \"$BASE/IDENTITY.md\""
-check "AGENTS.md 存在"          "test -f \"$BASE/AGENTS.md\""
-check "memory/core.md 存在"     "test -f \"$BASE/memory/core.md\""
-check "scripts/evolve.py 存在"  "test -f \"$BASE/scripts/evolve.py\""
+  for i,l in enumerate(open('$EVENTS_FILE'),1):
+    l=l.strip()
+    if not l: continue
+    try: json.loads(l)
+    except: bad.append(i)
+  if bad: print('bad lines:',bad); sys.exit(1)
+except FileNotFoundError: pass
+\""
+check "Disk > 1GB"               "disk_ok"
+check "IDENTITY.md exists"       "test -f \"$BASE/IDENTITY.md\""
+check "AGENTS.md exists"         "test -f \"$BASE/AGENTS.md\""
+check "memory/core.md exists"    "test -f \"$BASE/memory/core.md\""
+check "memory/errors.md exists"  "test -f \"$BASE/memory/errors.md\""
+check "scripts/evolve.py exists" "test -f \"$BASE/scripts/evolve.py\""
+check "evolve.py syntax OK"      "python3 -m py_compile \"$BASE/scripts/evolve.py\""
 
 echo ""
-echo "健康检查：OK=$PASS  ERR=$FAIL"
+echo "Health Check: OK=$PASS  ERR=$FAIL"
 [ $FAIL -gt 0 ] && exit 1 || exit 0

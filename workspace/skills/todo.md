@@ -1,8 +1,13 @@
-# skill: todo
-## 规则
-- 超过 3 步的任务必须先列 TODO 再执行
-- 输出有序列表，标注每步预期结果
-- 每完成一步立即更新状态 ✅/⏳/❌
-- 对话结束时汇报未完成项
+# /todo
+
+管理待办事项列表。
+
+## 命令
+- /todo add <内容>：添加待办
+- /todo list：列出所有待办
+- /todo done <编号>：标记完成
+- /todo clear：清理已完成项
+
 ## 存储
-未完成 TODO 追加写入：.openclaw/todo/YYYY-MM-DD.md
+待办保存在 ~/.openclaw/workspace/.sys/todo/YYYY-MM-DD.md
+每日自动归档前一天未完成的待办

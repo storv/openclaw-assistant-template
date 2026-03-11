@@ -1,157 +1,238 @@
 #!/usr/bin/env python3
-import json, os, re, shutil
-from collections import Counter
-from datetime import datetime
+"""
+evolve.py v3.1
+- 自动检测 OpenClaw 运行时目录（.sys/ 或 .openclaw/）
+- 结构化 events.jsonl（含 tag/count 字段）
+- 量化晋升：error count >= 2 -> errors.md pending
+- CLI: python3 evolve.py search <keyword> [top_n]
+"""
+
+import json
+import re
+import sys
 from pathlib import Path
+from collections import Counter
+from datetime import datetime, timedelta
 
-BASE   = Path(os.environ.get("WORKSPACE", str(Path.home() / ".openclaw/workspace")))
-LOGS   = BASE / ".openclaw/logs/events.jsonl"
-MEMORY = BASE / "memory/recent.md"
-STATE  = BASE / ".openclaw/logs/last_evolution_line.txt"
-REQUIRED = {"ts", "type", "uuid", "session_id"}
-
-for d in [LOGS.parent, BASE/".openclaw/sessions", BASE/".openclaw/baseline",
-          BASE/".openclaw/compact", BASE/"memory/archive"]:
-    d.mkdir(parents=True, exist_ok=True)
-if not LOGS.exists():  LOGS.touch()
-if not STATE.exists(): STATE.write_text("0", encoding="utf-8")
+BASE  = Path.home() / ".openclaw/workspace"
+MEM   = BASE / "memory/recent.md"
+ERRS  = BASE / "memory/errors.md"
 
 
-def validate(raw, lineno):
-    try:
-        e = json.loads(raw)
-    except json.JSONDecodeError as ex:
-        return None, f"行 {lineno}: JSON 错误 — {ex}"
-    miss = REQUIRED - e.keys()
-    if miss:
-        return None, f"行 {lineno}: 缺字段 {miss}"
-    try:
-        datetime.fromisoformat(e["ts"])
-    except ValueError:
-        return None, f"行 {lineno}: ts 非法 — {e['ts']}"
-    return e, None
+def _detect_runtime_dir(base: Path) -> Path:
+    """
+    自动检测 OpenClaw 实际使用的运行时目录。
+    优先使用已有数据的目录，fallback 到 .sys/（OpenClaw 默认）。
+    """
+    candidates = [
+        base / ".sys/logs/events.jsonl",
+        base / ".openclaw/logs/events.jsonl",
+    ]
+    for p in candidates:
+        if p.exists() and p.stat().st_size > 0:
+            return p
+    fallback = base / ".sys/logs/events.jsonl"
+    fallback.parent.mkdir(parents=True, exist_ok=True)
+    fallback.touch()
+    return fallback
 
 
-def load_new_events():
-    last = int(STATE.read_text(encoding="utf-8").strip() or "0")
-    all_lines = LOGS.read_text(encoding="utf-8").splitlines()
-    events, bad, seen = [], [], set()
-    for i, raw in enumerate(all_lines[last:]):
-        raw = raw.strip()
-        if not raw:
+LOGS = _detect_runtime_dir(BASE)
+
+for _d in ["sessions", "baseline", "todo", "compact"]:
+    LOGS.parent.parent.joinpath(_d).mkdir(parents=True, exist_ok=True)
+(BASE / "memory/archive").mkdir(parents=True, exist_ok=True)
+
+
+def load_recent_events(days=7):
+    events = []
+    cutoff = datetime.now() - timedelta(days=days)
+    if not LOGS.exists():
+        return events
+    for line in LOGS.read_text().splitlines():
+        line = line.strip()
+        if not line:
             continue
-        e, err = validate(raw, last + i + 1)
-        if err:
-            bad.append(err)
-            continue
-        key = e.get("uuid") or f"{e['ts']}-{e['type']}-{e.get('error','')}"
-        if key in seen:
-            continue
-        seen.add(key)
-        events.append(e)
-    if bad:
-        print(f"WARNING: 跳过 {len(bad)} 条非法行")
-        [print("  " + b) for b in bad]
-    return events, len(all_lines)
+        try:
+            e = json.loads(line)
+            if datetime.fromisoformat(e["ts"]) >= cutoff:
+                events.append(e)
+        except Exception:
+            pass
+    return events
 
 
-def get_insights(events):
-    corrections = [e for e in events if e.get("type") == "user_correction"]
-    errors      = [e for e in events if e.get("type") == "repeated_error"]
-    caps        = [e for e in events if e.get("type") == "new_capability"]
-    cnt  = Counter(e.get("error", "") for e in errors)
-    freq = [k for k, v in cnt.items() if v >= 3 and k]
+def append_event(type_: str, content: str, tags: list, count: int = 1, extra: dict = None):
+    """写入一条标准化事件到 events.jsonl"""
+    record = {
+        "ts":      datetime.now().isoformat(timespec="seconds"),
+        "type":    type_,
+        "tag":     tags,
+        "content": content,
+        "count":   count,
+    }
+    if extra:
+        record.update(extra)
+    with LOGS.open("a") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def search_memory(keyword: str, top_n: int = 5) -> list:
+    """逐行扫描 events.jsonl，按 count 降序返回匹配结果"""
+    results = []
+    if not LOGS.exists():
+        return results
+    kw = keyword.lower()
+    for line in LOGS.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if kw in line.lower():
+            try:
+                results.append(json.loads(line))
+            except Exception:
+                pass
+    results.sort(key=lambda x: (x.get("count", 1), x.get("ts", "")), reverse=True)
+    return results[:top_n]
+
+
+def extract_insights(events: list) -> dict:
+    corrections  = [e for e in events if e.get("type") == "user-correction"]
+    errors       = [e for e in events if e.get("type") in ("repeated-error", "user-correction")]
+    capabilities = [e for e in events if e.get("type") == "new-capability"]
+    preferences  = [e for e in events if e.get("type") == "preference"]
+
+    error_counts = Counter()
+    for e in errors:
+        key = e.get("content", "")[:80]
+        error_counts[key] += e.get("count", 1)
+
+    frequent_errors = [e for e, c in error_counts.items() if c >= 2]
+
+    all_tags = []
+    for e in events:
+        all_tags.extend(e.get("tag", []))
+    tag_summary = Counter(all_tags).most_common(5)
+
     return {
-        "corrections":     corrections,
-        "frequent_errors": freq,
-        "new_caps":        [e.get("description", "") for e in caps],
-        "total":           len(events),
-        "has_cluster":     bool(freq or corrections),
+        "corrections":      corrections,
+        "frequent_errors":  frequent_errors,
+        "new_capabilities": [e.get("content", "") for e in capabilities],
+        "preferences":      [e.get("content", "") for e in preferences],
+        "total_events":     len(events),
+        "tag_summary":      tag_summary,
     }
 
 
-def mem_section(ins):
-    lines = [
-        "## 历史学习",
-        f"最后更新：{datetime.now().strftime('%Y-%m-%d %H:%M')}",
-        f"自上次进化新增事件数：{ins['total']}",
-        "", "### 用户纠正行为",
-    ]
-    lines += [
-        f"- 不要 {c.get('old','?')}，应该 {c.get('new','?')}（原因：{c.get('reason','无')}）"
-        for c in ins["corrections"]
-    ] or ["- 无"]
-    lines += ["", "### 高频错误（已触发规则更新）"]
-    lines += [f"- {e}" for e in ins["frequent_errors"]] or ["- 无"]
-    lines += ["", "### 新掌握的能力/工具"]
-    lines += [f"- {c}" for c in ins["new_caps"]] or ["- 无"]
-    lines.append("")
-    return "\n".join(lines)
-
-
-def backup(p):
-    ts  = datetime.now().strftime("%Y%m%d_%H%M%S")
-    dst = p.with_suffix(f".bak.{ts}")
-    shutil.copy2(p, dst)
-    print(f"Backup: {dst}")
-
-
-def update_memory(ins):
-    if not MEMORY.exists():
-        print(f"WARNING: {MEMORY} 不存在")
+def update_memory(insights: dict):
+    if not MEM.exists():
+        print("[evolve] recent.md not found, skipped")
         return
-    try:
-        backup(MEMORY)
-        txt = MEMORY.read_text(encoding="utf-8")
-        if "## 历史学习" not in txt:
-            txt += "\n## 历史学习\n"
-        txt = re.sub(
-            r"## 历史学习.*?(?=\n## |\Z)",
-            mem_section(ins), txt, flags=re.DOTALL
-        )
-        MEMORY.write_text(txt, encoding="utf-8")
-        print(f"OK: 更新了 {ins['total']} 条事件的学习记录")
-    except (OSError, re.error) as ex:
-        print(f"ERROR: {ex}")
+    content  = MEM.read_text()
+    ts       = datetime.now().strftime("%Y-%m-%d %H:%M")
+    total    = insights["total_events"]
+    tag_line = ", ".join(f"{t}x{c}" for t, c in insights["tag_summary"]) or "-"
+
+    section = f"""
+## [{ts}] 进化摘要（近7天 {total} 事件）
+
+### 高频 Tag
+- {tag_line}
+
+### 用户纠正
+{chr(10).join(f"- {c.get('old','?')} -> {c.get('new','?')}（{c.get('reason','')}）" for c in insights["corrections"]) or "- 无"}
+
+### 高频错误（>=2次，待晋升）
+{chr(10).join(f"- {e}" for e in insights["frequent_errors"]) or "- 无"}
+
+### 新能力
+{chr(10).join(f"- {c}" for c in insights["new_capabilities"]) or "- 无"}
+
+### 用户偏好
+{chr(10).join(f"- {p}" for p in insights["preferences"]) or "- 无"}
+"""
+    new_content = re.sub(
+        r"## \[\d{4}-\d{2}-\d{2}.*?(?=## \[|\Z)",
+        section,
+        content,
+        flags=re.DOTALL,
+    )
+    if new_content == content:
+        new_content = content + section
+    MEM.write_text(new_content)
+    print(f"[evolve] recent.md updated ({total} events, logs: {LOGS})")
 
 
-def archive():
-    if not MEMORY.exists():
+def update_errors_md(insights: dict):
+    if not insights["frequent_errors"]:
         return
-    try:
-        lines = MEMORY.read_text(encoding="utf-8").splitlines()
-        if len(lines) > 300:
-            ap = BASE / f"memory/archive/{datetime.now().strftime('%Y-%m')}.md"
-            ap.write_text("\n".join(lines), encoding="utf-8")
-            MEMORY.write_text("\n".join(lines[-50:]), encoding="utf-8")
-            print(f"ARCHIVE: {ap}")
-    except OSError as ex:
-        print(f"ERROR: 归档失败 {ex}")
+    if not ERRS.exists():
+        ERRS.write_text("# Error Log\n\n")
+
+    content = ERRS.read_text()
+    ts = datetime.now().strftime("%Y-%m-%d")
+
+    for err_content in insights["frequent_errors"]:
+        if err_content in content:
+            content = re.sub(
+                r"(- \*\*出现次数\*\*：)(\d+)",
+                lambda m: f"{m.group(1)}{int(m.group(2)) + 1}",
+                content,
+                count=1,
+            )
+            content = content.replace("monitoring", "pending")
+        else:
+            content += f"""
+## [{ts}] {err_content[:60]}
+- **触发场景**：自动检测（events.jsonl）
+- **错误行为**：{err_content}
+- **正确处理**：待人工补充
+- **tag**：[auto-detected]
+- **出现次数**：2
+- **状态**：pending
+"""
+    ERRS.write_text(content)
+    print(f"[evolve] errors.md updated: {len(insights['frequent_errors'])} items")
+
+
+def archive_if_needed():
+    if not MEM.exists():
+        return
+    lines = MEM.read_text().splitlines()
+    if len(lines) > 300:
+        archive_path = BASE / f"memory/archive/{datetime.now().strftime('%Y-%m')}.md"
+        archive_path.write_text("\n".join(lines))
+        MEM.write_text("\n".join(lines[-50:]))
+        print(f"[evolve] archived to {archive_path}")
 
 
 if __name__ == "__main__":
-    print("evolve.py start", datetime.now().isoformat())
-    events, total_lines = load_new_events()
-    ins = get_insights(events)
+    print(f"[evolve] using logs: {LOGS}")
 
-    if ins["total"] < 5:
-        print(f"SKIP: 仅 {ins['total']} 条新事件，不足 5 条")
-        raise SystemExit(0)
+    if len(sys.argv) >= 2 and sys.argv[1] == "search":
+        if len(sys.argv) < 3:
+            print("Usage: python3 evolve.py search <keyword> [top_n]")
+            sys.exit(1)
+        keyword = sys.argv[2]
+        top_n   = int(sys.argv[3]) if len(sys.argv) >= 4 else 5
+        results = search_memory(keyword, top_n)
+        if not results:
+            print(f"No results for: {keyword}")
+        else:
+            print(f"Top {len(results)} results for '{keyword}':\n")
+            for r in results:
+                tags = ", ".join(r.get("tag", []))
+                print(f"[{r.get('ts','')}] [{r.get('type','')}] count={r.get('count',1)}")
+                print(f"  tags: {tags}")
+                print(f"  {r.get('content','')}\n")
+    else:
+        events   = load_recent_events(7)
+        insights = extract_insights(events)
+        update_memory(insights)
+        update_errors_md(insights)
+        archive_if_needed()
 
-    if not ins["has_cluster"]:
-        print("INFO: 无有效聚类，仅更新记忆")
-        update_memory(ins)
-        archive()
-        STATE.write_text(str(total_lines), encoding="utf-8")
-        raise SystemExit(0)
-
-    update_memory(ins)
-    archive()
-    STATE.write_text(str(total_lines), encoding="utf-8")
-
-    if ins["frequent_errors"]:
-        print("LEVEL2: 高频错误:", ins["frequent_errors"])
-        print("  → 在 OpenClaw 执行 /memory-evolution 审批 diff")
-    if ins["new_caps"]:
-        print("NEW_CAP:", ins["new_caps"])
-    print("evolve.py done")
+        if insights["frequent_errors"]:
+            print(f"[evolve] Pending promotion: {insights['frequent_errors']}")
+        if insights["new_capabilities"]:
+            print(f"[evolve] New capabilities: {insights['new_capabilities']}")

@@ -1,26 +1,42 @@
 #!/bin/bash
 BASE="${WORKSPACE:-$HOME/.openclaw/workspace}"
 DATE=$(date +%Y-%m-%d)
-DIR="$BASE/.openclaw/baseline"
-LOG="$DIR/baseline-$DATE.log"
-mkdir -p "$DIR"
+
+# 自动检测运行时目录
+RUNTIME_DIR=""
+for candidate in "$BASE/.sys" "$BASE/.openclaw"; do
+  if [ -d "$candidate/logs" ]; then
+    RUNTIME_DIR="$candidate"
+    break
+  fi
+done
+[ -z "$RUNTIME_DIR" ] && RUNTIME_DIR="$BASE/.sys"
+
+LOG="$RUNTIME_DIR/baseline/baseline-$DATE.log"
+mkdir -p "$RUNTIME_DIR/baseline"
 
 {
-  echo "=== 基线记录 $DATE ==="
-  echo "IDENTITY.md 行数:      $(wc -l < "$BASE/IDENTITY.md"                  2>/dev/null || echo N/A)"
-  echo "AGENTS.md 行数:        $(wc -l < "$BASE/AGENTS.md"                    2>/dev/null || echo N/A)"
-  echo "memory/recent.md 行数: $(wc -l < "$BASE/memory/recent.md"             2>/dev/null || echo N/A)"
-  echo "memory/project.md 行数:$(wc -l < "$BASE/memory/project.md"            2>/dev/null || echo N/A)"
-  echo "skills 数量:           $(ls "$BASE/skills/" 2>/dev/null | wc -l)"
-  echo "scripts 数量:          $(ls "$BASE/scripts/" 2>/dev/null | wc -l)"
-  echo "事件总数:              $(wc -l < "$BASE/.openclaw/logs/events.jsonl"   2>/dev/null || echo 0)"
-  echo "用户纠正次数:          $(grep -c '"user_correction"' "$BASE/.openclaw/logs/events.jsonl" 2>/dev/null || echo 0)"
-  echo "新能力次数:            $(grep -c '"new_capability"'  "$BASE/.openclaw/logs/events.jsonl" 2>/dev/null || echo 0)"
-  echo "git 提交数:            $(cd "$BASE" && git log --oneline 2>/dev/null | wc -l || echo 0)"
+  echo "=== Baseline $DATE ==="
+  echo "--- runtime dir: $RUNTIME_DIR ---"
+  echo "--- memory/recent.md lines ---"
+  wc -l "$BASE/memory/recent.md" 2>/dev/null
+  echo "--- memory/project.md lines ---"
+  wc -l "$BASE/memory/project.md" 2>/dev/null
+  echo "--- AGENTS.md lines ---"
+  wc -l "$BASE/AGENTS.md" 2>/dev/null
+  echo "--- skills count ---"
+  ls "$BASE/skills" 2>/dev/null | wc -l
+  echo "--- events.jsonl lines ---"
+  wc -l "$RUNTIME_DIR/logs/events.jsonl" 2>/dev/null
+  echo "--- error counts ---"
+  grep -c "repeated-error" "$RUNTIME_DIR/logs/events.jsonl" 2>/dev/null || echo 0
+  grep -c "new-capability"  "$RUNTIME_DIR/logs/events.jsonl" 2>/dev/null || echo 0
 } > "$LOG"
 
-PREV=$(ls "$DIR"/ | grep -v "^baseline-$DATE" | sort | tail -1)
-if [ -n "$PREV" ]; then
-  { echo ""; echo "=== 与上次对比 ($PREV) ==="; diff "$DIR/$PREV" "$LOG" || true; } >> "$LOG"
+HISTORY=$(ls "$RUNTIME_DIR/baseline/" | grep -v "$DATE" | sort | tail -1)
+if [ -n "$HISTORY" ]; then
+  echo "--- diff from last baseline ---" >> "$LOG"
+  diff "$RUNTIME_DIR/baseline/$HISTORY" "$LOG" >> "$LOG" 2>/dev/null || true
 fi
+
 cat "$LOG"
