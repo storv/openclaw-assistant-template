@@ -1,4 +1,4 @@
-# OpenClaw 内网数字助手模板 v3.1
+# OpenClaw 内网数字助手配置模板 v3.1
 
 > 零额外依赖（只需 python3 和 git），让 OpenClaw 具备“持续学习 + 自我进化”的能力。  
 > 模板目录：`workspace/`  
