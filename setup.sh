@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# OpenClaw 内网数字助手 — 一键部署脚本 v3.1
+# OpenClaw 内网数字助手 — 一键部署脚本 v3.3
 # 用法：
 #   bash setup.sh              # 安装到 ~/.openclaw/workspace
 #   bash setup.sh /custom/path # 安装到自定义路径
@@ -54,7 +54,32 @@ log "设置脚本执行权限..."
 chmod +x "$WORKSPACE/scripts/"*.sh 2>/dev/null || true
 chmod +x "$WORKSPACE/scripts/evolve.py" 2>/dev/null || true
 
-# 5. 快速健康检查
+# 5. 注册 crontab 定时任务
+log "注册 crontab 定时任务..."
+
+CRON_EVOLUTION="0 0 * * * WORKSPACE=$WORKSPACE python3 $WORKSPACE/scripts/evolve.py >> $WORKSPACE/.sys/logs/cron-memory-evolution.log 2>&1"
+CRON_REFLECTION="0 9 * * 1 echo '{\"ts\":\"$(date -Iseconds)\",\"type\":\"task-done\",\"tag\":[\"cron\",\"weekly\"],\"content\":\"weekly-self-reflection scheduled trigger\",\"count\":1}' >> $WORKSPACE/.sys/logs/events.jsonl"
+
+(
+  crontab -l 2>/dev/null | grep -v "cron-memory-evolution\|weekly-self-reflection"
+  echo "$CRON_EVOLUTION"
+  echo "$CRON_REFLECTION"
+) | crontab -
+
+# 验证
+if crontab -l 2>/dev/null | grep -q "cron-memory-evolution"; then
+  log "crontab 验证成功：memory-evolution 已注册（每天 00:00）"
+else
+  warn "memory-evolution 注册失败，请手动执行：crontab -e"
+fi
+
+if crontab -l 2>/dev/null | grep -q "weekly-self-reflection"; then
+  log "crontab 验证成功：weekly-self-reflection 已注册（每周一 09:00）"
+else
+  warn "weekly-self-reflection 注册失败，请手动执行：crontab -e"
+fi
+
+# 6. 快速健康检查
 log "运行健康检查脚本..."
 WORKSPACE="$WORKSPACE" bash "$WORKSPACE/scripts/health-check.sh" || {
   warn "健康检查有 ERR，可在 OpenClaw 里执行 /health-check 查看详情"
@@ -91,16 +116,16 @@ memory/project.md、memory/recent.md、memory/errors.md
 - 将用户信息写入 memory/core.md
 - 执行 /remember 和 /session-notes
 
-完成后请立即创建 2 个定时任务（使用 OpenClaw 自己的定时能力）：
-1. 每天 00:00 执行 /memory-evolution
-2. 每周一 09:00 执行 /weekly-self-reflection
+完成后请验证定时任务状态：
+exec: crontab -l | grep -E "memory-evolution|weekly-self-reflection"
 
-定时任务创建完成后：
-- 告诉我你创建了哪些任务，下一次触发时间
-- 做一个简短的自我介绍，确认全部初始化完成
+将验证结果告诉我，然后做一个简短的自我介绍，确认全部初始化完成。
 PROMPT_EOF
 echo "------------------------------------------------------------"
 echo ""
 echo "你可以："
 echo "  1. 复制以上提示词到 OpenClaw 对话；"
 echo "  2. 或者直接把本 setup.sh 文件拖给 OpenClaw，让它按步骤执行。"
+echo ""
+echo "定时任务状态（当前）："
+crontab -l 2>/dev/null | grep -E "memory-evolution|weekly-self-reflection" || echo "  （未检测到，请查看上方警告）"
