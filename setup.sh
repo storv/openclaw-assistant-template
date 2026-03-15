@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# OpenClaw 内网数字助手 — 一键部署脚本 v3.4.1
+# OpenClaw 内网数字助手 — 一键部署脚本 v3.4.2
 #
 # 用法 A（系统终端）：
 #   bash setup.sh                 # 安装到 ~/.openclaw/workspace
@@ -9,7 +9,11 @@
 #
 # 用法 B（OpenClaw 对话）：
 #   将本文件拖给 OpenClaw → AI 完成文件部署 + 自动注册 OpenClaw 原生 cron
-#   不依赖系统 crontab，OpenClaw Gateway 内置调度器直接管理定时任务
+#
+# v3.4.2 修复：
+#   Docker / OpenClaw 对话环境下，setup.sh 所在目录可能已在 workspace 内部，
+#   导致拷贝出现路径嵌套（如 ~/.openclaw/workspace/openclaw-assistant-template/workspace）
+#   新增路径自检逻辑，自动修正 TEMPLATE_DIR 和 WORKSPACE，并清理嵌套目录
 # ============================================================
 
 set -e
@@ -26,22 +30,47 @@ log()  { echo -e "${GREEN}[setup]${NC} $1"; }
 warn() { echo -e "${YELLOW}[warn]${NC} $1"; }
 fail() { echo -e "${RED}[fail]${NC} $1"; exit 1; }
 
+# ── 路径嵌套自检（v3.4.2 新增）──────────────────────────────────────────────
+# 场景：Docker / 对话环境里 setup.sh 被放在 workspace 目录内部运行，
+#       REPO_DIR 已经是 workspace 子目录，再往下找 workspace/ 会多套一层。
+# 修正：若检测到嵌套，TEMPLATE_DIR 改为 REPO_DIR 本身，WORKSPACE 锁定为标准路径。
+_SKIP_COPY=0
+_DEFAULT_WS="$HOME/.openclaw/workspace"
+_REAL_WS="$(mkdir -p "$_DEFAULT_WS" && cd "$_DEFAULT_WS" && pwd)"
+
+if [[ "$REPO_DIR" == "$_REAL_WS"* ]]; then
+  warn "检测到 setup.sh 运行在 workspace 内部（$REPO_DIR）"
+  warn "自动修正路径，防止嵌套目录产生"
+  TEMPLATE_DIR="$REPO_DIR"
+  WORKSPACE="$_REAL_WS"
+  # 若 TEMPLATE_DIR 与 WORKSPACE 完全相同，无需拷贝
+  [ "$TEMPLATE_DIR" = "$WORKSPACE" ] && _SKIP_COPY=1
+fi
+
 # ── 1. 基本检查 ──────────────────────────────────────────────────────────
-[ -d "$TEMPLATE_DIR" ] || fail "找不到 workspace/ 目录，请确认仓库结构正确"
+[ -d "$TEMPLATE_DIR" ] || fail "找不到模板目录（$TEMPLATE_DIR），请确认仓库结构正确"
 command -v python3 &>/dev/null || fail "python3 未安装，请先安装后重试"
 
 log "模板目录：$TEMPLATE_DIR"
 log "目标 workspace：$WORKSPACE"
 
 # ── 2. 拷贝模板文件 ───────────────────────────────────────────────────────
-if [ -f "$WORKSPACE/.sys/logs/events.jsonl" ] && \
-   [ -s "$WORKSPACE/.sys/logs/events.jsonl" ] && \
-   [ "$FORCE" = "0" ]; then
+if [ "$_SKIP_COPY" = "1" ]; then
+  log "TEMPLATE_DIR 与 WORKSPACE 相同，跳过拷贝"
+elif [ -f "$WORKSPACE/.sys/logs/events.jsonl" ] && \
+     [ -s "$WORKSPACE/.sys/logs/events.jsonl" ] && \
+     [ "$FORCE" = "0" ]; then
   warn "检测到已有数据，跳过模板覆盖（强制重装请加 --force）"
 else
-  log "复制 workspace/ 到目标目录..."
+  log "复制文件到目标目录..."
   mkdir -p "$WORKSPACE"
   cp -r "$TEMPLATE_DIR"/. "$WORKSPACE"/
+  # 拷贝后检查并清理嵌套目录（如 $WORKSPACE/workspace/）
+  if [ -d "$WORKSPACE/workspace" ]; then
+    warn "检测到嵌套目录 $WORKSPACE/workspace/，自动清理..."
+    rm -rf "$WORKSPACE/workspace"
+    log "嵌套目录已清理"
+  fi
 fi
 
 # ── 3. 初始化运行时目录 ───────────────────────────────────────────────────
@@ -67,14 +96,12 @@ chmod +x "$WORKSPACE/scripts/create_event.py" 2>/dev/null || true
 # 优先级：
 #   1. openclaw cron add（OpenClaw 原生，终端/对话均可）
 #   2. 系统 crontab（终端专用，兜底方案）
-#   3. 均不可用时，生成 install-cron.sh 供手动操作
+#   3. 均不可用 → 生成 install-cron.sh，并在激活提示词中引导 AI 补注册
 
 log "注册定时任务..."
 
 _register_openclaw_cron() {
   log "使用 OpenClaw 原生 cron 注册定时任务..."
-
-  # 任务1：每天 00:00 运行 evolve.py（记忆进化）
   openclaw cron add \
     --name "memory-evolution" \
     --cron "0 0 * * *" \
@@ -85,7 +112,6 @@ _register_openclaw_cron() {
     log "memory-evolution 已注册（每天 00:00 UTC）" || \
     warn "memory-evolution 注册失败"
 
-  # 任务2：每周一 09:00 写入周报触发信号
   openclaw cron add \
     --name "weekly-self-reflection-trigger" \
     --cron "0 9 * * 1" \
@@ -96,9 +122,8 @@ _register_openclaw_cron() {
     log "weekly-self-reflection-trigger 已注册（每周一 09:00 UTC）" || \
     warn "weekly-self-reflection-trigger 注册失败"
 
-  # 验证
   if openclaw cron list 2>/dev/null | grep -q "memory-evolution"; then
-    log "OpenClaw cron 验证成功，当前任务列表："
+    log "OpenClaw cron 验证成功："
     openclaw cron list 2>/dev/null | grep -E "memory-evolution|weekly-self-reflection"
     return 0
   else
@@ -109,16 +134,13 @@ _register_openclaw_cron() {
 
 _register_system_cron() {
   log "使用系统 crontab 注册定时任务..."
-
   CRON_EVOLUTION="0 0 * * * WORKSPACE=$WORKSPACE python3 $WORKSPACE/scripts/evolve.py >> $WORKSPACE/.sys/logs/cron-memory-evolution.log 2>&1"
   CRON_REFLECTION="0 9 * * 1 python3 -c \"import json,sys; from datetime import datetime,timezone; sys.stdout.write(json.dumps({'ts':datetime.now(timezone.utc).isoformat(timespec='seconds'),'type':'task-done','tags':['cron','weekly'],'content':'weekly-self-reflection scheduled trigger','count':1},ensure_ascii=False)+chr(10))\" >> $WORKSPACE/.sys/logs/events.jsonl"
-
   (
     crontab -l 2>/dev/null | grep -v "cron-memory-evolution\|weekly-self-reflection"
     echo "$CRON_EVOLUTION"
     echo "$CRON_REFLECTION"
   ) | crontab -
-
   crontab -l 2>/dev/null | grep -q "cron-memory-evolution" && \
     log "memory-evolution 已注册（每天 00:00）" || warn "memory-evolution 注册失败"
   crontab -l 2>/dev/null | grep -q "weekly-self-reflection" && \
@@ -131,42 +153,37 @@ _write_install_cron() {
 #!/bin/bash
 # install-cron.sh — 由 setup.sh 自动生成，在系统终端运行
 # Workspace: $WORKSPACE
-
 set -e
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 log()  { echo -e "\${GREEN}[cron]\${NC} \$1"; }
 warn() { echo -e "\${YELLOW}[warn]\${NC} \$1"; }
 
-# 优先尝试 openclaw cron
 if command -v openclaw &>/dev/null; then
   log "使用 OpenClaw 原生 cron..."
   openclaw cron add --name "memory-evolution" --cron "0 0 * * *" --tz "UTC" \
     --session isolated \
-    --message "执行记忆进化：运行 exec: WORKSPACE=$WORKSPACE python3 $WORKSPACE/scripts/evolve.py，完成后静默结束" \
+    --message "执行记忆进化：exec: WORKSPACE=$WORKSPACE python3 $WORKSPACE/scripts/evolve.py，完成后静默结束" \
     --delivery none
   openclaw cron add --name "weekly-self-reflection-trigger" --cron "0 9 * * 1" --tz "UTC" \
-    --session main \
-    --system-event "weekly-self-reflection scheduled trigger" \
-    --wake now
+    --session main --system-event "weekly-self-reflection scheduled trigger" --wake now
   log "完成！运行 openclaw cron list 确认"
 elif command -v crontab &>/dev/null; then
   log "使用系统 crontab..."
-  CRON_EVOLUTION="0 0 * * * WORKSPACE=$WORKSPACE python3 $WORKSPACE/scripts/evolve.py >> $WORKSPACE/.sys/logs/cron-memory-evolution.log 2>&1"
-  CRON_REFLECTION="0 9 * * 1 python3 -c \"import json,sys; from datetime import datetime,timezone; sys.stdout.write(json.dumps({'ts':datetime.now(timezone.utc).isoformat(timespec='seconds'),'type':'task-done','tags':['cron','weekly'],'content':'weekly-self-reflection scheduled trigger','count':1},ensure_ascii=False)+chr(10))\" >> $WORKSPACE/.sys/logs/events.jsonl"
+  CRON_EVO="0 0 * * * WORKSPACE=$WORKSPACE python3 $WORKSPACE/scripts/evolve.py >> $WORKSPACE/.sys/logs/cron-memory-evolution.log 2>&1"
+  CRON_REF="0 9 * * 1 python3 -c \"import json,sys; from datetime import datetime,timezone; sys.stdout.write(json.dumps({'ts':datetime.now(timezone.utc).isoformat(timespec='seconds'),'type':'task-done','tags':['cron','weekly'],'content':'weekly-self-reflection scheduled trigger','count':1},ensure_ascii=False)+chr(10))\" >> $WORKSPACE/.sys/logs/events.jsonl"
   ( crontab -l 2>/dev/null | grep -v "cron-memory-evolution\|weekly-self-reflection"
-    echo "\$CRON_EVOLUTION"; echo "\$CRON_REFLECTION" ) | crontab -
+    echo "\$CRON_EVO"; echo "\$CRON_REF" ) | crontab -
   crontab -l | grep -E "memory-evolution|weekly-self-reflection"
   log "完成！"
 else
-  warn "未找到 openclaw 或 crontab 命令"
-  warn "请手动定期执行：python3 $WORKSPACE/scripts/evolve.py"
+  warn "未找到 openclaw 或 crontab，请手动定期执行："
+  warn "  python3 $WORKSPACE/scripts/evolve.py"
 fi
 SCRIPT_EOF
   chmod +x "$INSTALL_SCRIPT"
-  log "已生成备用安装脚本：$INSTALL_SCRIPT"
+  log "备用脚本已生成：$INSTALL_SCRIPT"
 }
 
-# 按优先级尝试注册
 CRON_DONE=0
 if command -v openclaw &>/dev/null; then
   _register_openclaw_cron && CRON_DONE=1
@@ -174,9 +191,7 @@ fi
 if [ "$CRON_DONE" = "0" ] && command -v crontab &>/dev/null; then
   _register_system_cron && CRON_DONE=1
 fi
-if [ "$CRON_DONE" = "0" ]; then
-  warn "当前环境无法自动注册定时任务（可能在 OpenClaw 对话中运行）"
-fi
+[ "$CRON_DONE" = "0" ] && warn "当前环境无法自动注册定时任务"
 
 # 始终生成 install-cron.sh 备用
 _write_install_cron
@@ -199,27 +214,23 @@ if [ "$CRON_DONE" = "1" ]; then
   echo "二、定时任务已自动注册完成 ✅"
 else
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "⚠️  定时任务待注册（deploy 在 OpenClaw 对话中运行时属正常情况）"
+  echo "⚠️  定时任务待注册（沙箱/对话环境属正常情况，生产部署后自动完成）"
   echo ""
-  echo "在 OpenClaw 对话中，粘贴以下指令让 AI 完成注册："
-  echo ""
-  echo "  请执行以下两条 OpenClaw cron 命令注册定时任务："
+  echo "在 OpenClaw 对话中粘贴以下指令让 AI 完成注册："
   echo ""
   echo "  exec: openclaw cron add \\"
-  echo "    --name \"memory-evolution\" \\"
-  echo "    --cron \"0 0 * * *\" --tz \"UTC\" \\"
+  echo "    --name \"memory-evolution\" --cron \"0 0 * * *\" --tz \"UTC\" \\"
   echo "    --session isolated \\"
   echo "    --message \"执行记忆进化：exec: WORKSPACE=$WORKSPACE python3 $WORKSPACE/scripts/evolve.py\" \\"
   echo "    --delivery none"
   echo ""
   echo "  exec: openclaw cron add \\"
-  echo "    --name \"weekly-self-reflection-trigger\" \\"
-  echo "    --cron \"0 9 * * 1\" --tz \"UTC\" \\"
+  echo "    --name \"weekly-self-reflection-trigger\" --cron \"0 9 * * 1\" --tz \"UTC\" \\"
   echo "    --session main \\"
   echo "    --system-event \"weekly-self-reflection scheduled trigger\" \\"
   echo "    --wake now"
   echo ""
-  echo "  或直接在终端运行：bash $WORKSPACE/scripts/install-cron.sh"
+  echo "  或在终端运行：bash $WORKSPACE/scripts/install-cron.sh"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 fi
 
@@ -249,22 +260,20 @@ memory/project.md、memory/recent.md、memory/errors.md
 - 将用户信息写入 memory/core.md
 - 执行 /remember 和 /session-notes
 
-完成初始化后，请检查 OpenClaw cron 定时任务是否已注册：
+完成后，检查 OpenClaw cron 定时任务是否已注册：
   exec: openclaw cron list
 
 若输出中不包含 memory-evolution 和 weekly-self-reflection-trigger，
-请自动执行以下注册（将 WORKSPACE 替换为实际路径）：
+请自动执行注册（将 WORKSPACE_PATH 替换为实际 workspace 路径）：
 
   exec: openclaw cron add \
-    --name "memory-evolution" \
-    --cron "0 0 * * *" --tz "UTC" \
+    --name "memory-evolution" --cron "0 0 * * *" --tz "UTC" \
     --session isolated \
     --message "执行记忆进化：exec: WORKSPACE=WORKSPACE_PATH python3 WORKSPACE_PATH/scripts/evolve.py，完成后静默结束" \
     --delivery none
 
   exec: openclaw cron add \
-    --name "weekly-self-reflection-trigger" \
-    --cron "0 9 * * 1" --tz "UTC" \
+    --name "weekly-self-reflection-trigger" --cron "0 9 * * 1" --tz "UTC" \
     --session main \
     --system-event "weekly-self-reflection scheduled trigger" \
     --wake now
