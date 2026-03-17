@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# OpenClaw 内网数字助手 — 一键部署脚本 v3.9
+# OpenClaw 内网数字助手 — 一键部署脚本 v3.4.3
 #
 # 用法 A（系统终端）：
 #   bash setup.sh                 # 安装到 ~/.openclaw/workspace
@@ -11,8 +11,8 @@
 #   将本文件拖给 OpenClaw → AI 完成文件部署 + 自动注册 OpenClaw 原生 cron
 #
 # 版本历史：
-#   v3.8: 修复路径嵌套问题（Docker/对话环境 TEMPLATE_DIR 自检修正）
-#   v3.9: chmod 补充 session_note_writer.py 和 farewell_detector.py
+#   v3.4.2: 修复路径嵌套问题（Docker/对话环境 TEMPLATE_DIR 自检修正）
+#   v3.4.3: chmod 补充 session_note_writer.py 和 farewell_detector.py
 # ============================================================
 
 set -e
@@ -29,7 +29,7 @@ log()  { echo -e "${GREEN}[setup]${NC} $1"; }
 warn() { echo -e "${YELLOW}[warn]${NC} $1"; }
 fail() { echo -e "${RED}[fail]${NC} $1"; exit 1; }
 
-# ── 路径嵌套自检（v3.8）──────────────────────────────────────────────────
+# ── 路径嵌套自检（v3.4.2）────────────────────────────────────────────────
 _SKIP_COPY=0
 _DEFAULT_WS="$HOME/.openclaw/workspace"
 _REAL_WS="$(mkdir -p "$_DEFAULT_WS" && cd "$_DEFAULT_WS" && pwd)"
@@ -87,10 +87,15 @@ log "设置脚本执行权限..."
 chmod +x "$WORKSPACE/scripts/"*.sh 2>/dev/null || true
 chmod +x "$WORKSPACE/scripts/evolve.py" 2>/dev/null || true
 chmod +x "$WORKSPACE/scripts/create_event.py" 2>/dev/null || true
-chmod +x "$WORKSPACE/scripts/session_note_writer.py" 2>/dev/null || true  # v3.9
-chmod +x "$WORKSPACE/scripts/farewell_detector.py" 2>/dev/null || true    # v3.9
+chmod +x "$WORKSPACE/scripts/session_note_writer.py" 2>/dev/null || true  # v3.4.3
+chmod +x "$WORKSPACE/scripts/farewell_detector.py" 2>/dev/null || true    # v3.4.3
 
 # ── 5. 定时任务注册 ───────────────────────────────────────────────────────
+# 优先级：
+#   1. openclaw cron add（OpenClaw 原生，终端/对话均可）
+#   2. 系统 crontab（终端专用，兜底方案）
+#   3. 均不可用 → 生成 install-cron.sh，激活提示词引导 AI 补注册
+
 log "注册定时任务..."
 
 _register_openclaw_cron() {
