@@ -216,11 +216,9 @@ python3 workspace/scripts/fix_nonstandard_types.py    # 修复非标准 type
 | v3.2 | 修复激活提示词视角问题（关于我/关于你） |
 | v3.3 | 修复 evolve.py 时区 bug |
 | v3.4 | 修复 evolve.py 3个字段一致性 bug；新增 create_event.py；session-notes.md 补充规范 |
-| v3.5 | setup.sh 定时任务改为条件执行，新增4种注册方案说明 |
-| v3.6 | setup.sh 新增 install-cron.sh 自动生成；激活提示词引导 AI 补注册 |
-| v3.7 | setup.sh 接入 OpenClaw 原生 cron，终端和对话双场景均可注册 |
-| v3.8 | setup.sh 修复路径嵌套问题（Docker/对话环境 TEMPLATE_DIR 自检修正） |
-| v3.9 | 新增 session_note_writer.py（/session-notes 真正实现）和 farewell_detector.py（35+告别词检测）；AGENTS.md 伪命令改为真实 exec: 调用；health-check.sh 新增活跃度检测和新脚本验证 |
+| v3.4.1 | setup.sh 定时任务全面升级：条件执行 + install-cron.sh 自动生成 + 接入 OpenClaw 原生 cron，终端和对话双场景均可注册 |
+| v3.4.2 | setup.sh 修复路径嵌套问题（Docker/对话环境 TEMPLATE_DIR 自检修正） |
+| v3.4.3 | 新增 session_note_writer.py（/session-notes 真正实现）和 farewell_detector.py（35+告别词检测）；AGENTS.md 伪命令改为真实 exec: 调用；health-check.sh 新增活跃度检测和新脚本验证 |
 
 ---
 
