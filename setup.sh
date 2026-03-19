@@ -1,21 +1,24 @@
 #!/bin/bash
 # ============================================================
 # OpenClaw 数字助手 v3.7 — 一键部署脚本
+# 放置位置：openclaw-assistant-template/setup.sh（仓库根目录）
+#
 # 用法：
 #   bash setup.sh              # 安装到 ~/.openclaw/workspace
 #   bash setup.sh /custom/path # 安装到自定义路径
 #   bash setup.sh --force      # 强制重装（覆盖记忆文件，谨慎）
 # ============================================================
 # v3.7 变更：
-#   - 恢复脚本同步：cp 仓库脚本 → workspace/scripts/（直接覆盖）
-#   - 删除系统 crontab 注册逻辑（避免与 OpenClaw 原生 cron 双重触发）
+#   - 修复脚本同步路径：$REPO_DIR/workspace/scripts/ → $WORKSPACE/scripts/
+#   - 删除系统 crontab 注册（避免与 OpenClaw 原生 cron 双重触发）
 #   - 自动清理 v3.6 遗留的系统 crontab 条目
-#   - 恢复健康检查（10 项核心检查）
+#   - 恢复 10 项健康检查
 #   - 新增 memory/growth.md 初始化
 # ============================================================
 
 set -e
 
+# $REPO_DIR = 仓库根目录（setup.sh 所在位置）
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE="${1:-$HOME/.openclaw/workspace}"
 FORCE=0
@@ -64,9 +67,13 @@ touch "$WORKSPACE/.sys/logs/events.jsonl"
 [ -f "$WORKSPACE/.sys/logs/last_evolution_line.txt" ] || echo "0" > "$WORKSPACE/.sys/logs/last_evolution_line.txt"
 
 # ════════════════════════════════════════════════════════════
-# 3. 同步脚本文件（直接覆盖，确保版本一致）
+# 3. 同步脚本文件（仓库 workspace/scripts/ → $WORKSPACE/scripts/）
+#    直接覆盖，确保版本与仓库一致
 # ════════════════════════════════════════════════════════════
-log "同步脚本文件到 workspace/scripts/..."
+log "同步脚本文件到 $WORKSPACE/scripts/..."
+
+# 脚本源目录：仓库根目录/workspace/scripts/
+SCRIPTS_SRC="$REPO_DIR/workspace/scripts"
 
 SCRIPTS=(
     evolve.py
@@ -77,16 +84,13 @@ SCRIPTS=(
 )
 
 for s in "${SCRIPTS[@]}"; do
-    if [ -f "$REPO_DIR/$s" ]; then
-        cp "$REPO_DIR/$s" "$WORKSPACE/scripts/$s"
+    if [ -f "$SCRIPTS_SRC/$s" ]; then
+        cp "$SCRIPTS_SRC/$s" "$WORKSPACE/scripts/$s"
         log "  已更新：scripts/$s"
     else
-        warn "  仓库中未找到：$s（跳过）"
+        warn "  仓库中未找到：workspace/scripts/$s（跳过）"
     fi
 done
-
-# setup.sh 自身也同步过去
-cp "$REPO_DIR/setup.sh" "$WORKSPACE/scripts/setup.sh" 2>/dev/null || true
 
 # ════════════════════════════════════════════════════════════
 # 4. 初始化记忆文件（不覆盖已有数据）
@@ -185,15 +189,15 @@ for s in evolve.py create_event.py session_note_writer.py fix_recent_events_tags
 done
 [ -z "$MISSING_S" ] && ok "5 个脚本均存在" || ng "缺少：$MISSING_S"
 
-# 8. create_event.py 实际运行
-check "8/10  create_event.py 可正常运行"
+# 8. create_event.py --list-types（v3.7.1 无需 --type 参数）
+check "8/10  create_event.py 可正常运行（--list-types）"
 if python3 "$WORKSPACE/scripts/create_event.py" --list-types &>/dev/null; then
     ok "运行正常"
 else
     ng "运行失败，请检查脚本语法"
 fi
 
-# 9. evolve.py 实际运行
+# 9. evolve.py
 check "9/10  evolve.py 可正常运行"
 EVOLVE_OUT=$(python3 "$WORKSPACE/scripts/evolve.py" 2>&1 || true)
 if echo "$EVOLVE_OUT" | grep -q "using logs"; then
@@ -202,7 +206,7 @@ else
     ng "运行异常：$EVOLVE_OUT"
 fi
 
-# 10. 系统 crontab 冲突
+# 10. 系统 crontab 无冲突
 check "10/10 系统 crontab 无冲突条目"
 SYS_CRON=$(crontab -l 2>/dev/null | grep -E "memory-evolution|weekly-self-reflection" || true)
 if [ -z "$SYS_CRON" ]; then
