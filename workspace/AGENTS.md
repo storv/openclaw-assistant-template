@@ -1,130 +1,118 @@
-# Agent Identity & Rules
+# AGENTS — 行为规范 v3.6
+# ============================================================
+# 变更协议（SSOT 原则）
+# - 新增规则前，必须搜索是否存在相同职责的旧规则
+# - 旧规则若被新规则替代，必须同行标注 [deprecated] 或删除
+# - 路径、工具名、函数名变更必须全文搜索替换，不允许新旧并存
+# ============================================================
 
-## 初始化流程
-启动时读取以下文件完成上下文加载（按顺序）：
-1. IDENTITY.md
-2. AGENTS.md
-3. memory/core.md
-4. memory/project.md
-5. memory/recent.md
-6. memory/errors.md
-7. skills/ 下所有文件
+## 路径权威定义（唯一可信来源，所有脚本以此为准）
 
----
+| 用途 | 路径 | 说明 |
+|------|------|------|
+| 业务事件流 | `.sys/logs/events.jsonl` | **唯一写入路径**，所有脚本写此处 |
+| Gateway 平台日志 | `.openclaw/logs/events.jsonl` | 只读，平台自动写入，**脚本禁止读写** |
+| 进化摘要 | `memory/recent.md` | 由 evolve.py 自动维护 |
+| 错误库 | `memory/errors.md` | 人工维护为主，evolve.py 自动追加待晋升项 |
+| 成长记录 | `memory/growth.md` | 长期能力成长轨迹，由 evolve.py 自动追加 |
+| 会话记录 | `.sys/sessions/` | /session-notes 指令写入 |
+| cron 日志 | `.sys/logs/cron-memory-evolution.log` | cron 自动写入 |
 
-## 核心行为规则
-- 回答前先检查 memory/recent.md 是否有相关历史
-- 执行文件操作前确认路径
-- 遇到不确定内容，先问清楚再行动
-- 代码修改前说明改动范围
-
----
-
-## /session-notes 实现规范
-
-`/session-notes` 不是概念标签，必须通过以下脚本真正执行。
-
-### 标准调用方式
-
-```
-exec: python3 ~/.openclaw/workspace/scripts/session_note_writer.py   --summary   "本次会话摘要（自然语言，简明扼要）"   --type      task-done   --content   "完成的具体内容，中文不少于120字符"   --tags      task-completion,progress   [--error    "发现的错误描述（可选）"]
-```
-
-### 脚本完成的4个步骤（缺一不可）
-1. 写会话摘要 → `.sys/sessions/YYYY-MM-DD.md`（同时写 `.openclaw/sessions/`）
-2. 追加结构化事件 → `.sys/logs/events.jsonl`
-3. 若有错误 → 更新 `memory/errors.md`
-4. 触发 `/remember` → 更新 `memory/recent.md`
+> ⚠️ 排查问题时必须检查 `.sys/logs/events.jsonl`
+> 勿误读 `.openclaw/logs/events.jsonl`（两个文件同名但用途不同）
 
 ---
 
-## 事件写入规范（强制执行）
+## 事件记录规范
 
-每条写入 `events.jsonl` 的事件必须符合：
+**所有事件统一通过 `create_event.py` 写入 `.sys/logs/events.jsonl`。**
+不使用 evolve.py 的 append_event()，不使用任何其他写入逻辑。
 
-```json
-{
-  "ts":      "2026-03-17T00:00:00+00:00",
-  "type":    "<标准类型>",
-  "content": "<详细描述>",
-  "tags":    ["tag1", "tag2"],
-  "count":   1
-}
+### 标准事件类型（共 14 种）
+
+| 类型 | 说明 | 最低内容长度 |
+|------|------|------------|
+| `task-done` | 完成任务 | 8 词 |
+| `error-found` | 发现错误 | 8 词 |
+| `system-improvement` | 系统改进 | 10 词 |
+| `learning-achievement` | 学习成就（需含学习价值） | 15 词 |
+| `user-correction` | 用户纠正 | 10 词 |
+| `automation-deployment` | 自动化部署 | 5 词 |
+| `error-fix` | 错误修复 | 5 词 |
+| `system-monitoring` | 系统监控 | 5 词 |
+| `quality-verification` | 质量验证 | 5 词 |
+| `new-capability` | 新能力获得 | 5 词 |
+| `automation-planning` | 自动化规划 | 5 词 |
+| `memory-compaction` | 记忆压缩 | 5 词 |
+| `pua-inspection` | 深度架构检查 | 5 词 |
+| `quality-improvement` | 质量改进 | 5 词 |
+
+### 写入方式（唯一）
+
+```bash
+python3 scripts/create_event.py --type <类型> --content "<内容>"
+# 可选参数
+python3 scripts/create_event.py --type <类型> --content "<内容>" --tags "tag1,tag2" --count 2
 ```
-
-**强制要求：**
-- 字段名必须用 `tags`（不是 `tag`）
-- `ts` 必须带 UTC 时区偏移（`+00:00`）
-- `type` 必须从标准列表中选取（共14个）
-- `tags` 至少 1 个
-
-**推荐使用 create_event.py 单独写入事件：**
-```
-exec: python3 ~/.openclaw/workspace/scripts/create_event.py   --type learning-achievement   --content "详细描述..."
-```
-
-### 标准 type 枚举（14个，不可自造）
-
-| type | 说明 | 最低字数 |
-|---|---|---|
-| task-done | 完成任务 | 8单元 |
-| error-found | 发现错误 | 8单元 |
-| system-improvement | 系统改进 | 10单元 |
-| learning-achievement | 学习成就 | 15单元 |
-| user-correction | 用户纠正 | 10单元 |
-| automation-deployment | 自动化部署 | 5单元 |
-| error-fix | 错误修复 | 5单元 |
-| system-monitoring | 系统监控 | 5单元 |
-| quality-verification | 质量验证 | 5单元 |
-| new-capability | 新能力（兼容旧数据） | 5单元 |
-| automation-planning | 自动化规划 | 5单元 |
-| memory-compaction | 内存压缩 | 5单元 |
-| pua-inspection | 深度检查 | 5单元 |
-| quality-improvement | 质量改进 | 5单元 |
-
-> 字数单元：中文每15字符≈1单元；英文按单词数计算。
 
 ---
 
-## 自动规则
+## 记忆文件说明
 
-### 规则1：会话结束告别词自动触发
-
-检测到以下告别词时，**立即静默执行 /session-notes，不输出任何过程提示，直接回告别语**。
-
-**检测方式（优先使用脚本）：**
-```
-exec: python3 ~/.openclaw/workspace/scripts/farewell_detector.py   --text      "<用户最后一句话>"   --auto-trigger   --summary   "<本次会话摘要>"   --type      task-done   --content   "<本次完成的内容>"   --tags      session,auto-close
-```
-
-**告别词列表（35+种）：**
-- 中文：再见、拜了、拜拜、先这样、下次再说、结束、退出、88、886、晚安、
-        好的再见、就这样吧、暂时这样、今天就到这、先到这里、告一段落、
-        下线了、去忙了、忙去了、有空再聊、回头见、待会见、改天聊、先聊到这
-- 英文：bye、goodbye、see you、see ya、later、quit、done、that's all、
-        good night、gotta go、gtg、ttyl、talk later、take care、signing off
-
-### 规则2：启动时检查周报触发信号
-
-启动时检查 `events.jsonl` 最近一条是否包含：
-- `type: task-done`
-- `tags` 包含 `"weekly"`
-- `content: "weekly-self-reflection scheduled trigger"`
-
-若存在且距今不超过 24 小时，自动执行 `/weekly-self-reflection`。
-
-### 规则3：路径双写兼容
-
-所有文件操作同时兼容以下两个路径，以存在且非空的为准：
-- `~/.openclaw/workspace/.sys/logs/events.jsonl`
-- `~/.openclaw/workspace/.openclaw/logs/events.jsonl`
-
-`session_note_writer.py` 和 `evolve.py` 均已内置自动探测逻辑，无需手动指定。
+| 文件 | 维护方式 | 说明 |
+|------|---------|------|
+| `memory/core.md` | 人工 | 用户基本信息、偏好 |
+| `memory/project.md` | 人工 | 当前项目信息 |
+| `memory/recent.md` | evolve.py 自动 | 近 7 天事件摘要，超 300 行自动归档 |
+| `memory/errors.md` | evolve.py 追加 + 人工晋升 | 高频错误库，pending → promoted 需人工确认 |
+| `memory/growth.md` | evolve.py 自动追加 | 长期能力成长轨迹，记录新能力里程碑 |
 
 ---
 
-## 记忆管理规则
-- 每次对话结束执行 `/session-notes`（通过 `session_note_writer.py` 真正写入）
-- 重要学习立即通过 `create_event.py` 写入 `events.jsonl`
-- 用户纠正立即记录（type: user-correction）
-- `evolve.py` 每天 00:00 自动整理近7天事件到 `memory/recent.md`
+## 快捷指令
+
+| 指令 | 行为 |
+|------|------|
+| `/remember` | 将本次会话重要内容写入事件日志（调用 create_event.py） |
+| `/session-notes` | 生成会话摘要，保存到 `.sys/sessions/` |
+| `/health-check` | 检查系统状态（见下方健康检查项） |
+| `/evolve` | 手动触发记忆进化（运行 evolve.py） |
+| `/search [keyword]` | 搜索历史记忆（调用 evolve.py search） |
+
+### /health-check 检查项
+
+```bash
+# 1. 事件日志（正确路径）
+cat ~/.openclaw/workspace/.sys/logs/events.jsonl | wc -l
+
+# 2. cron 任务
+crontab -l | grep -E "memory-evolution|weekly-self-reflection"
+
+# 3. evolve.py 手动运行
+python3 ~/.openclaw/workspace/scripts/evolve.py
+
+# 4. growth.md 存在
+ls ~/.openclaw/workspace/memory/growth.md
+```
+
+---
+
+## cron 定时任务
+
+| 任务 | 执行时间 | 脚本 |
+|------|---------|------|
+| 记忆进化 | 每天 00:00 | `evolve.py` |
+| 每周自我反思 | 每周一 09:00 | 写入 task-done 事件到 `.sys/logs/events.jsonl` |
+
+---
+
+## 脚本职责一览（禁止职责交叉）
+
+| 脚本 | 唯一职责 | 写入路径 |
+|------|---------|---------|
+| `create_event.py` | 标准化事件写入 | `.sys/logs/events.jsonl` |
+| `evolve.py` | 读取事件、提炼记忆 | `memory/recent.md`, `memory/errors.md`, `memory/growth.md` |
+| `setup.sh` | 一键部署、cron 注册 | 目录初始化 |
+| `fix_recent_events_tags.py` | 修复历史 Tags 缺失 | `.sys/logs/events.jsonl`（in-place） |
+| `fix_nonstandard_types.py` | 修复非标准类型 | `.sys/logs/events.jsonl`（in-place） |
+| `session_note_writer.py` | 会话摘要写入 | `.sys/logs/events.jsonl`, `.sys/sessions/` |
