@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-create_event.py v3.7
+create_event.py v3.7.1
 - v3.6: 路径统一 .sys/logs/events.jsonl
-- v3.7: 修复中文概念单元计算——除数从 15 改为 5（两处同步修改）
-  原因：中文信息密度约为英文的3倍，75汉字 ≈ 15英文词，标准应对等
+- v3.7: 修复中文概念单元计算（CN_UNIT_DIVISOR = 5）
+- v3.7.1: --list-types 不再依赖 --type（required=False，独立执行）
 """
 
 import json, sys, os, argparse
@@ -39,10 +39,9 @@ TAG_RULES = {
     'pua-inspection':       ['pua-mode', 'deep-inspection', 'architecture-check'],
 }
 
-# ── 中文概念单元除数 ──────────────────────────────────────────────────
-# 英文：1 词 = 1 单元
-# 中文：5 字 = 1 单元（中文信息密度约为英文3倍，75汉字 ≈ 15英文词）
-CN_UNIT_DIVISOR = 5  # v3.7 从 15 修正为 5
+# 中文概念单元除数（v3.7）
+# 英文：1词 = 1单元；中文：5字 = 1单元（75汉字 ≈ 15英文词）
+CN_UNIT_DIVISOR = 5
 
 
 def validate_event_type(t: str) -> bool:
@@ -50,25 +49,15 @@ def validate_event_type(t: str) -> bool:
 
 
 def validate_content(content: str, event_type: str) -> bool:
-    """
-    校验内容长度是否达到最低要求。
-    中文：len(cs) / CN_UNIT_DIVISOR 个概念单元
-    英文：len(cs.split()) 个词
-    """
     if not content or not content.strip():
         return False
     cs = content.strip()
     has_cn = any('\u4e00' <= c <= '\u9fff' for c in cs)
-    # ✅ 第一处修改：校验计算
     units = len(cs) / CN_UNIT_DIVISOR if has_cn else len(cs.split())
     return units >= MIN_CONTENT_LENGTH.get(event_type, MIN_CONTENT_LENGTH['default'])
 
 
 def get_content_units(content: str) -> float:
-    """
-    返回内容的概念单元数（用于 display / 错误提示）。
-    ✅ 第二处修改：display 计算与校验逻辑保持一致
-    """
     cs = content.strip()
     has_cn = any('\u4e00' <= c <= '\u9fff' for c in cs)
     return len(cs) / CN_UNIT_DIVISOR if has_cn else len(cs.split())
@@ -107,7 +96,7 @@ def create_standard_event(event_type, content, tags=None, count=1, extra=None):
         return None
     if not validate_content(content, event_type):
         required = MIN_CONTENT_LENGTH.get(event_type, MIN_CONTENT_LENGTH['default'])
-        actual   = get_content_units(content)  # ✅ 使用统一的 display 函数
+        actual   = get_content_units(content)
         print(f"❌ 内容质量不足：需要 {required} 个概念单元，当前约 {actual:.1f} 个")
         cs = content.strip()
         has_cn = any('\u4e00' <= c <= '\u9fff' for c in cs)
@@ -133,7 +122,6 @@ def append_event_to_file(event, output_file=None):
     if output_file:
         filepath = Path(output_file)
     else:
-        # v3.6 统一路径
         filepath = Path(__file__).parent.parent / '.sys' / 'logs' / 'events.jsonl'
     filepath.parent.mkdir(parents=True, exist_ok=True)
     with open(filepath, 'a', encoding='utf-8') as f:
@@ -143,9 +131,10 @@ def append_event_to_file(event, output_file=None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='标准化事件创建工具 v3.7')
-    parser.add_argument('--type',       required=True)
-    parser.add_argument('--content',    required=True, nargs='+')
+    parser = argparse.ArgumentParser(description='标准化事件创建工具 v3.7.1')
+    # v3.7.1：--type 改为非必填，--list-types 时无需提供
+    parser.add_argument('--type',       required=False, default=None)
+    parser.add_argument('--content',    required=False, nargs='+', default=None)
     parser.add_argument('--tags',       default=None)
     parser.add_argument('--count',      type=int, default=1)
     parser.add_argument('--extra',      default=None)
@@ -153,11 +142,19 @@ def main():
     parser.add_argument('--list-types', action='store_true')
     args = parser.parse_args()
 
+    # --list-types 独立执行，不依赖 --type
     if args.list_types:
+        print("支持的标准事件类型：")
         for t in STANDARD_TYPES:
             req = MIN_CONTENT_LENGTH.get(t, MIN_CONTENT_LENGTH['default'])
-            print(f"  {t:<30} 最低 {req} 概念单元（中文约 {req * CN_UNIT_DIVISOR} 字）")
+            print(f"  {t:<30} 最低 {req:>2} 概念单元（中文约 {req * CN_UNIT_DIVISOR:>3} 字）")
         return 0
+
+    # 非 --list-types 模式：--type 和 --content 必填
+    if not args.type:
+        parser.error("请提供 --type 参数，或使用 --list-types 查看所有类型")
+    if not args.content:
+        parser.error("请提供 --content 参数")
 
     tags  = [t.strip() for t in args.tags.split(',')] if args.tags else None
     extra = None
