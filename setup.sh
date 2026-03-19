@@ -110,7 +110,7 @@ if [ ! -f "$WORKSPACE/memory/core.md" ]; then
     log "创建 memory/core.md"
 fi
 if [ ! -f "$WORKSPACE/memory/growth.md" ]; then
-    printf "# Growth Log\n_长期能力成长轨迹，由 evolve.py 自动追加_\n\n" > "$WORKSPACE/memory/growth.md"
+    printf "# Growth Log\n\n_长期能力成长轨迹，由 evolve.py 自动追加_\n_格式：\`- [YYYY-MM-DD] [event-type] content\`_\n\n---\n\n" > "$WORKSPACE/memory/growth.md"
     log "创建 memory/growth.md"
 fi
 

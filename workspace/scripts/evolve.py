@@ -186,17 +186,38 @@ def update_errors_md(insights: dict):
 
 
 def update_growth_md(insights: dict):
-    """v3.6 新增：将 new-capability / learning-achievement 事件追加到 growth.md"""
+    """
+    v3.6 新增：将 new-capability / learning-achievement 事件追加到 growth.md
+    v3.7.2 修复两个 bug：
+      1. 去重用事件原始 ts 日期（而非今天日期），避免历史事件每次重复追加
+      2. 内容取首行不截断（split('\\n')[0]），避免换行破坏格式
+    """
     if not insights.get('raw_capabilities'):
         return
     if not GROW.exists():
         GROW.parent.mkdir(parents=True, exist_ok=True)
-        GROW.write_text('# Growth Log\n_长期能力成长轨迹，由 evolve.py 自动追加_\n\n')
+        GROW.write_text(
+            '# Growth Log\n\n'
+            '_长期能力成长轨迹，由 evolve.py 自动追加_\n'
+            '_格式：`- [YYYY-MM-DD] [event-type] content`_\n\n'
+            '---\n\n'
+        )
     content   = GROW.read_text()
-    ts        = datetime.now(timezone.utc).strftime('%Y-%m-%d')
     new_lines = []
     for e in insights['raw_capabilities']:
-        entry = f'- [{ts}] [{e.get("type","")}] {e.get("content","")[:120]}'
+        # ✅ Bug1 修复：用事件原始 ts 日期，不用今天日期
+        event_ts = e.get('ts', '')
+        try:
+            event_date = datetime.fromisoformat(event_ts).strftime('%Y-%m-%d')
+        except (ValueError, TypeError):
+            event_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+
+        # ✅ Bug2 修复：取内容首行，不截断，不破坏格式
+        raw_content = e.get('content', '')
+        first_line  = raw_content.split('\n')[0].strip()
+
+        entry = f'- [{event_date}] [{e.get("type","")}] {first_line}'
+        # 去重：检查事件原始日期+首行内容是否已存在
         if entry not in content:
             new_lines.append(entry)
     if new_lines:
